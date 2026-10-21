@@ -8,11 +8,14 @@ from datetime import datetime, timedelta
 from airflow.decorators import dag, task
 
 from pipeline.retrain.extract_month_batch import extract_month_batch
+from pipeline.retrain.evaluate_candidate import evaluate_candidate
 from pipeline.retrain.fit_catboost import fit_catboost
 from pipeline.retrain.preprocess_dataset import preprocess_dataset
 from pipeline.retrain.publish_model import publish_model
 from pipeline.retrain.slide_training_window import slide_training_window
 from pipeline.retrain.time_train_test_split import time_train_test_split
+from pipeline.retrain.evaluate_candidate import evaluate_candidate
+from pipeline.retrain.finalize_training import finalize_training
 
 
 @dag(
@@ -34,21 +37,58 @@ from pipeline.retrain.time_train_test_split import time_train_test_split
 2. Месяц добавляется в датасет из трёх месяцев, самый старый месяц выбрасывается.
 3. Train — два более ранних месяца, test — самый свежий.
 4. Препроцессинг — `run_preproc` из `fraud_detector/src`.
-5. CatBoost обучается, бинарник публикуется в общий каталог моделей.
+5. CatBoost обучается, кандидат сохраняется в общий каталог моделей.
+6. Кандидат и действующая модель оцениваются на одном свежем test.
+7. Кандидат публикуется, только если обе метрики не хуже и хотя бы одна лучше.
 
-Указатель месяца в `training_state` сдвигается только после публикации модели.
+Указатель месяца в `training_state` сдвигается после успешного сохранения
+кандидата, оценки и завершения обработки окна, в том числе при отказе
+в публикации. При отказе активная модель и `latest.txt` остаются прежними.
 Если очередного месяца в витрине ещё нет, задачи помечаются как skipped.
 Новые месяцы после исторических данных дописывает DAG `supply_labeled_batch`.
     """,
 )
 def retrain_catboost():
-    """Связывает извлечение месяца, сдвиг окна, split, препроцессинг, обучение и публикацию."""
-    extracted = task(extract_month_batch, task_id="extract_month_batch")()
-    slid = task(slide_training_window, task_id="slide_training_window")(extracted)
-    split = task(time_train_test_split, task_id="time_train_test_split")(slid)
-    processed = task(preprocess_dataset, task_id="preprocess_dataset")(split)
-    trained = task(fit_catboost, task_id="fit_catboost")(processed)
-    task(publish_model, task_id="publish_model")(trained)
+    """Связывает подготовку данных, обучение, оценку, публикацию и фиксацию окна."""
+    extracted = task(
+        extract_month_batch,
+        task_id="extract_month_batch",
+    )()
+
+    slid = task(
+        slide_training_window,
+        task_id="slide_training_window",
+    )(extracted)
+
+    split = task(
+        time_train_test_split,
+        task_id="time_train_test_split",
+    )(slid)
+
+    processed = task(
+        preprocess_dataset,
+        task_id="preprocess_dataset",
+    )(split)
+
+    trained = task(
+        fit_catboost,
+        task_id="fit_catboost",
+    )(processed)
+
+    evaluated = task(
+        evaluate_candidate,
+        task_id="evaluate_candidate",
+    )(trained)
+
+    published = task(
+        publish_model,
+        task_id="publish_model",
+    )(evaluated)
+
+    task(
+        finalize_training,
+        task_id="finalize_training",
+    )(published)
 
 
 retrain_catboost()

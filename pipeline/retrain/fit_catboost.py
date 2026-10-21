@@ -2,10 +2,16 @@
 
 import logging
 from datetime import datetime, timezone
+import os
 
 import pandas as pd
 
-from pipeline.settings import CAT_FEATURES, LABEL, MODELS_DIR
+from pipeline.settings import (
+    CAT_FEATURES,
+    LABEL,
+    CANDIDATES_DIR,
+    SCORE_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +33,15 @@ def prepare_features(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 
 
 def fit_catboost(preproc_info: dict) -> dict:
-    """Обучает CatBoost на train и считает ROC-AUC и F1 на свежем месяце.
+    """Обучает CatBoost на train и оценивает его на свежем test-месяце.
 
-    Читает обработанные parquet из preproc_info. Модель учится с ранней
-    остановкой по test-месяцу и сохраняется во временный .cbm в каталоге моделей.
-    В общий latest.txt файл ещё не публикуется.
-    Возвращает версию, путь к черновику, метрики и путь к новому окну.
+    Читает обработанные train и test из parquet по путям из preproc_info.
+    Обучает модель с фиксированным числом итераций и сохраняет кандидата
+    в MODELS_DIR/candidates. Возвращает путь к модели, метрики и данные окна.
+
+    Не изменяет latest.txt и указатель месяца в training_state.
+    Повтор может создать дополнительный файл кандидата, но не изменяет
+    действующую модель и исходные данные.
     """
     from catboost import CatBoostClassifier
     from sklearn.metrics import f1_score, roc_auc_score
@@ -49,7 +58,6 @@ def fit_catboost(preproc_info: dict) -> dict:
         loss_function="Logloss",
         eval_metric="AUC",
         auto_class_weights="Balanced",
-        early_stopping_rounds=20,
         random_seed=42,
         allow_writing_files=False,
         verbose=20,
@@ -58,33 +66,48 @@ def fit_catboost(preproc_info: dict) -> dict:
         x_train,
         y_train,
         cat_features=CAT_FEATURES,
-        eval_set=(x_test, y_test),
-        use_best_model=True,
     )
 
+    # сохраняем кандидата до оценки на тесте
+    version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+
+    CANDIDATES_DIR.mkdir(parents=True, exist_ok=True)
+
+    candidate_path = CANDIDATES_DIR / f"candidate_{version}.cbm"
+    temp_path = candidate_path.with_suffix(".tmp")
+
+    try:
+        model.save_model(str(temp_path), format="cbm")
+        os.replace(temp_path, candidate_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    logger.info("кандидат модели сохранён: %s", candidate_path)
+
     proba = model.predict_proba(x_test)[:, 1]
-    pred = (proba > 0.5).astype(int)
+    pred = (proba > SCORE_THRESHOLD).astype(int)
+
     f1 = float(f1_score(y_test, pred, zero_division=0))
+
     if y_test.nunique() < 2:
         roc_auc = None
-        logger.warning("В test одна метка, ROC-AUC не определён. F1=%.4f", f1)
+        logger.warning("В test один класс: ROC-AUC не определён")
     else:
         roc_auc = float(roc_auc_score(y_test, proba))
-        logger.info(
-            "Качество на test %s: ROC-AUC=%.4f, F1=%.4f",
-            preproc_info["test_month"],
-            roc_auc,
-            f1,
-        )
 
-    version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    staging_model = MODELS_DIR / f".staging_{version}.cbm"
-    model.save_model(str(staging_model))
-    logger.info("Черновик модели сохранён: %s", staging_model)
+    logger.info(
+        "Кандидат %s: test_month=%s, ROC-AUC=%s, F1=%.4f",
+        version,
+        preproc_info["test_month"],
+        roc_auc,
+        f1,
+    )
+
     return {
         "version": version,
-        "staging_model": str(staging_model),
+        "staging_model": str(candidate_path),
+        "train_proc_path": str(preproc_info["train_proc_path"]),
+        "test_proc_path": str(preproc_info["test_proc_path"]),
         "dataset_path": preproc_info["dataset_path"],
         "batch_month": preproc_info["batch_month"],
         "train_months": preproc_info["train_months"],

@@ -12,6 +12,13 @@ PENDING_WINDOW = TRAINING_DIR / "pending_window.parquet"
 BATCHES_DIR = TRAINING_DIR / "batches"
 SPLITS_DIR = TRAINING_DIR / "splits"
 SUPPLY_BATCH = TRAINING_DIR / "supply_batch.parquet"
+CANDIDATES_DIR = MODELS_DIR / "candidates"
+EVALUATIONS_DIR = MODELS_DIR / "evaluations"
+
+# должен совпадать с порогом в онлайн-скорере
+SCORE_THRESHOLD = 0.5
+# обе метрики не хуже, хотя бы одна лучше
+REQUIRE_STRICT_IMPROVEMENT = True
 
 CAT_FEATURES = [
     "merch",
