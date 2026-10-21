@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Удаляем PID-файл предыдущего запуска перед стартом Airflow.
+rm -f /opt/airflow/airflow-webserver.pid
 
 mkdir -p \
   /opt/airflow/models \

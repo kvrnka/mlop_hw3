@@ -42,7 +42,10 @@ def publish_model(evaluation: dict) -> dict:
 
         if next_month > batch_month:
             logger.info("Месяц %s уже обработан; ничего не меняем", batch_month)
-            return {"status": "already_processed", "version": version}
+            return {
+                **evaluation,
+                "status": "already_processed",
+            }
 
         active_version = latest_path.read_text(encoding="utf-8").strip()
         allowed_versions = {evaluation["current_version"]}
