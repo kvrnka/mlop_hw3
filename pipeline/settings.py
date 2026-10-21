@@ -13,7 +13,18 @@ BATCHES_DIR = TRAINING_DIR / "batches"
 SPLITS_DIR = TRAINING_DIR / "splits"
 SUPPLY_BATCH = TRAINING_DIR / "supply_batch.parquet"
 
-CAT_FEATURES = ["merch", "cat_id", "gender", "one_city", "us_state", "jobs"]
+CAT_FEATURES = [
+    "merch",
+    "cat_id",
+    "name_1",
+    "name_2",
+    "gender",
+    "street",
+    "one_city",
+    "us_state",
+    "post_code",
+    "jobs",
+]
 LABEL = "target"
 SAMPLE_SIZE = 100_000
 HISTORY_YEARS = 3

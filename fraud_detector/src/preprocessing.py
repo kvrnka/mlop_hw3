@@ -1,54 +1,66 @@
-import logging
-
-import numpy as np
+# Import standard libraries
 import pandas as pd
+import numpy as np
+import logging
 
 logger = logging.getLogger(__name__)
 
+CAT_COLS = [
+    "merch", 
+    "cat_id", 
+    "name_1", 
+    "name_2", 
+    "gender",
+    "street", 
+    "one_city", 
+    "us_state", 
+    "post_code", 
+    "jobs",
+]
 
-def load_train_data():
-    logger.info('Loading training data...')
+NUM_COLS = [
+    "amount", 
+    "lat", 
+    "lon", 
+    "population_city", 
+    "merchant_lat", 
+    "merchant_lon",
+]
 
-    # Import Train dataset
-    train = pd.read_csv('./train_data/train.csv')
-    logger.info('Raw train data imported. Shape: %s', train.shape)
+def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
+    """одинаковая предобработка для train и inference"""
+    required = CAT_COLS + NUM_COLS + ["transaction_time"]
+    # проверка, что все столбцы есть
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(f"в данных нет нужных столбцов: {missing}")
 
-    # Add some features
-    train = add_features(train)
-    logger.info('Train data processed. Shape: %s', train.shape)
+    X = df[CAT_COLS + NUM_COLS].copy()
 
-    return train
+    # заполняем пропуски в категориальных признаках
+    for col in CAT_COLS:
+        X[col] = X[col].astype("string").fillna("__MISSING__").astype(str)
 
+    # меняем странные значения на nan
+    for col in NUM_COLS:
+        X[col] = pd.to_numeric(X[col], errors="coerce").astype(float)
+    X[NUM_COLS] = X[NUM_COLS].replace([np.inf, -np.inf], np.nan)
 
-def haversine(lat1, lon1, lat2, lon2):
-    rad = 6371
-    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-    return rad * c
+    # преобразуем дату
+    dt = pd.to_datetime(df["transaction_time"], errors="coerce")
+    if not dt.notna().any():
+        raise ValueError("не удалось распознать transaction_time")
+    X["hour"] = dt.dt.hour.astype(float)
+    X["day_of_week"] = dt.dt.dayofweek.astype(float)
+    X["month"] = dt.dt.month.astype(float)
 
+    return X
 
-def add_features(df):
-    df_ = df.copy()
-    df_['haversine'] = haversine(df_['lat'], df_['lon'],
-                                 df_['merchant_lat'], df_['merchant_lon'])
-    df_["transaction_time"] = pd.to_datetime(df_["transaction_time"])
-    df_["year"] = df_["transaction_time"].dt.year
-    df_["month"] = df_["transaction_time"].dt.month
-    df_["day"] = df_["transaction_time"].dt.day
-    df_["hour"] = df_["transaction_time"].dt.hour
-    df_["minute"] = df_["transaction_time"].dt.minute
-    df_["weekend"] = (df_["transaction_time"].dt.dayofweek > 4).astype(int)
-    return df_.drop(columns=["transaction_time", "name_1", "name_2", "street"])
+def run_preproc(df: pd.DataFrame) -> pd.DataFrame:
+    """обертка над prepare_features для совместимости"""
+    result = prepare_features(df)
 
+    if "target" in df.columns:
+        result["target"] = df["target"]
 
-# Main preprocessing function
-def run_preproc(input_df):
-    # Add features
-    output_df = add_features(input_df)
-    logger.info('Added new features. Output shape: %s', output_df.shape)
-
-    # Return resulting dataset
-    return output_df
+    return result
